@@ -61,3 +61,4 @@ print(pivot)
 # Other functions: apply, map, transform, etc. (examples)
 df['F'] = df['Alpha'].apply(lambda x: x**2)  # Apply function
 print(df)
+
