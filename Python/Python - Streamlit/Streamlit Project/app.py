@@ -5,13 +5,24 @@ import time
 import PyPDF2
 from docx import Document
 from PIL import Image
-import pytesseract
+try:
+    import pytesseract
+    PYTESSERACT_AVAILABLE = True
+except ImportError:
+    PYTESSERACT_AVAILABLE = False
 
 # Backend URL
 BACKEND_URL = "http://localhost:8000"
 
+# Initialize session state variables
 if 'pause' not in st.session_state:
     st.session_state.pause = False
+
+if 'messages' not in st.session_state:
+    st.session_state.messages = []
+
+if 'current_session' not in st.session_state:
+    st.session_state.current_session = None
 
 def extract_pdf_text(file):
     reader = PyPDF2.PdfReader(file)
@@ -28,17 +39,19 @@ def extract_docx_text(file):
     return text
 
 def extract_image_text(file):
+    if not PYTESSERACT_AVAILABLE:
+        return f"An image named '{file.name}' has been uploaded. OCR library (pytesseract) is not installed. Please describe what you see in this image for better analysis."
     try:
         image = Image.open(file)
         text = pytesseract.image_to_string(image)
         if text.strip():
             return text
         else:
-            return f"An image named '{file.name}' has been uploaded. No text was extracted via OCR. Please analyze or describe what this image might show based on the filename and any relevant context. If you have a description, provide it for better analysis."
+            return f"An image named '{file.name}' has been uploaded. No text was extracted via OCR. Please analyze or describe what this image might show based on the filename and any relevant context."
     except Exception as e:
-        return f"An image named '{file.name}' has been uploaded. OCR failed due to: {str(e)}. Please analyze or describe what this image might show based on the filename and any relevant context. If you have a description, provide it for better analysis."
+        return f"An image named '{file.name}' has been uploaded. OCR failed due to: {str(e)}. Please analyze or describe what this image might show based on the filename."
 
-st.title("Personalized Learning Assistant Chatbot")
+st.title("AI Chatbot")
 
 # Sidebar for sessions
 st.sidebar.header("Chat Sessions")
@@ -51,15 +64,22 @@ except:
     sessions = []
 
 # Auto-create session if none
-if "current_session" not in st.session_state:
+if "current_session" not in st.session_state or st.session_state.current_session is None:
     try:
         response = requests.post(f"{BACKEND_URL}/session", json={"name": "New Chat"})
         if response.status_code == 200:
             new_session = response.json()
             st.session_state.current_session = new_session["id"]
             st.session_state.messages = []
-    except:
-        pass
+            st.sidebar.success(f"Session created: ID {new_session['id']}")
+        else:
+            st.sidebar.error(f"Failed to create session: {response.status_code}")
+    except Exception as e:
+        st.sidebar.error(f"Error creating session: {str(e)}")
+
+# Show current session ID for debugging
+if st.session_state.current_session:
+    st.sidebar.info(f"Current Session: {st.session_state.current_session}")
 
 session_names = [s["name"] for s in sessions]
 
@@ -146,18 +166,23 @@ if "current_session" in st.session_state:
             response = requests.get(f"{BACKEND_URL}/sessions")
             if response.status_code == 200:
                 all_sessions = response.json()
-                for sess in all_sessions:
-                    requests.delete(f"{BACKEND_URL}/session/{sess['id']}")
-                st.session_state.messages = []
-                if "current_session" in st.session_state:
-                    del st.session_state.current_session
-                st.sidebar.success("All chats deleted!")
-                st.rerun()
+                if all_sessions:
+                    deleted_count = 0
+                    for sess in all_sessions:
+                        del_response = requests.delete(f"{BACKEND_URL}/session/{sess['id']}")
+                        if del_response.status_code == 200:
+                            deleted_count += 1
+                    st.session_state.messages = []
+                    if "current_session" in st.session_state:
+                        del st.session_state.current_session
+                    st.sidebar.success(f"Deleted {deleted_count} chat(s)!")
+                    st.rerun()
+                else:
+                    st.sidebar.warning("No chats to delete!")
             else:
-                st.sidebar.error("Failed to get sessions")
-        except:
-            pass
-    st.session_state.messages = []
+                st.sidebar.error(f"Failed to get sessions: {response.status_code}")
+        except Exception as e:
+            st.sidebar.error(f"Error deleting chats: {str(e)}")
 
 # Display chat history
 for msg in st.session_state.messages:
@@ -183,6 +208,27 @@ if uploaded_file_inline and "current_session" in st.session_state:
         st.error(f"Error processing file: {e}")
     
     if extracted.strip():
+        # Save file to database
+        try:
+            import base64
+            uploaded_file_inline.seek(0)  # Reset file pointer
+            file_bytes = uploaded_file_inline.read()
+            file_b64 = base64.b64encode(file_bytes).decode('utf-8')
+            
+            save_response = requests.post(f"{BACKEND_URL}/upload", json={
+                "session_id": st.session_state.current_session,
+                "filename": uploaded_file_inline.name,
+                "file_type": file_type,
+                "file_content": file_b64,
+                "extracted_text": extracted
+            })
+            
+            if save_response.status_code == 200:
+                st.success(f"✅ File '{uploaded_file_inline.name}' processed")
+            else:
+                st.warning("File processed but not saved to database")
+        except Exception as e:
+            st.warning(f"File processed but save failed: {str(e)}")
         analysis_prompt = f"Please analyze the following content from the uploaded {file_type.split('/')[-1]} file:\n\n{extracted}"
         st.session_state.messages.append({"role": "user", "content": analysis_prompt})
         with st.chat_message("user"):
@@ -196,9 +242,9 @@ if uploaded_file_inline and "current_session" in st.session_state:
                     st.markdown(ai_response)
                 st.session_state.messages.append({"role": "assistant", "content": ai_response})
             else:
-                st.error("Error getting response")
-        except:
-            pass
+                st.error(f"Error getting response: {response.status_code}")
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
     else:
         st.error("No text extracted from the file")
 

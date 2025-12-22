@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, DateTime, LargeBinary
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import datetime
@@ -30,6 +30,16 @@ class ChatLog(Base):
     response = Column(Text)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
     rating = Column(Integer, nullable=True)  # 1-5 rating
+
+class UploadedFile(Base):
+    __tablename__ = "uploaded_files"
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, index=True)
+    filename = Column(String)
+    file_type = Column(String)
+    file_content = Column(LargeBinary)  # Store actual file
+    extracted_text = Column(Text)  # Store extracted text
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
 
 class Quiz(Base):
     __tablename__ = "quizzes"
